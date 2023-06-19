@@ -1,0 +1,32 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.0.9'
+    id 'com.github.johnrengelman.shadow' version '7.1.2'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.8.8'
+}
+
+javafx {
+    version = "17"
+    modules = [ 'javafx.controls', 'javafx.fxml' ]
+}
+
+application {
+    mainClass = 'com.graphiti.app.graphitiappai.MainApplication'
+}
+
+shadowJar {
+    archiveBaseName.set('graphitiappai')
+    archiveVersion.set('0.1.0')
+    archiveClassifier.set('')
+    manifest {
+        attributes 'Main-Class': 'com.graphiti.app.graphitiappai.MainApplication'
+    }
+}
