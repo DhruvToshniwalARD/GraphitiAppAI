@@ -1,15 +1,17 @@
 package com.graphiti.app.graphitiappai;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.google.gson.JsonElement;
+import javafx.application.Platform;
 import javafx.fxml.FXML;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
-import javafx.scene.canvas.Canvas;
-import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 
 import java.io.File;
@@ -19,6 +21,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 
 public class Controller {
 
@@ -29,6 +34,8 @@ public class Controller {
     @FXML
     private Button feedbackButton;
     @FXML
+    private Label connectionStatus;
+    @FXML
     private ImageView imageView;
     @FXML
     private Canvas canvas;
@@ -36,12 +43,42 @@ public class Controller {
     private Label feedbackLabel;
 
     private File selectedFile;
+    private ExecutorService usbListenerExecutor;
+    private GraphitiDriver driver = new GraphitiDriver();
     private JsonObject objectInfo; // JSON object for storing object detection information
 
     @FXML
     public void initialize() {
-        // this.imageView = new ImageView();
+        listenForUSBConnection();
+        this.imageView = new ImageView();
         // this.canvas = new Canvas(500, 500); // Initialize Canvas with arbitrary size
+        // checkConnectionStatus();
+    }
+
+    private void listenForUSBConnection() {
+        usbListenerExecutor = Executors.newSingleThreadExecutor();
+        usbListenerExecutor.submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                // Call the method to check the connection status
+                Platform.runLater(this::checkConnectionStatus);
+                try {
+                    // Check for connection every second
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+    }
+
+    private void checkConnectionStatus() {
+        if (driver.isConnected()) {
+            connectionStatus.setText("Connected");
+            connectionStatus.setTextFill(Color.GREEN);
+        } else {
+            connectionStatus.setText("Not connected");
+            connectionStatus.setTextFill(Color.RED);
+        }
     }
 
     @FXML
@@ -50,19 +87,31 @@ public class Controller {
         this.selectedFile = fileChooser.showOpenDialog(null);
 
         if (this.selectedFile != null) {
+            feedbackLabel.setText("Current file: " + selectedFile.getName());
             try {
                 URI selectedFileURI = this.selectedFile.toURI();
                 Image image = new Image(selectedFileURI.toString());
                 this.displayImage(image);
+
+                // Check if Graphiti is connected and send image
+                if (driver.isConnected()) {
+                    // Send image to Graphiti device
+                    driver.sendImageFile(selectedFile.getPath(), true);  // You might need to adjust the second parameter according to your needs
+                } else {
+                    System.out.println("Graphiti device not connected. Can't send image.");
+                }
+
             } catch (IllegalArgumentException e) {
                 System.out.println("Invalid image file selected. Please select a valid image file.");
             } catch (Exception e) {
                 System.out.println("An unexpected error occurred while uploading the image.");
+                e.printStackTrace();
             }
         } else {
             System.out.println("No file selected.");
         }
     }
+
 
     private void displayImage(Image image) {
         this.imageView.setImage(image);
@@ -172,6 +221,12 @@ public class Controller {
             });
 
             canvas.setOnMouseExited(event -> feedbackLabel.setText(""));
+        }
+    }
+
+    public void shutdown() {
+        if (usbListenerExecutor != null) {
+            usbListenerExecutor.shutdownNow();
         }
     }
 }

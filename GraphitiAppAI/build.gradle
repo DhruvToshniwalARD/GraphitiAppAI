@@ -11,11 +11,14 @@ repositories {
 
 dependencies {
     implementation 'com.google.code.gson:gson:2.8.8'
+    implementation 'com.google.cloud:google-cloud-vision:2.0.4'
+    implementation 'com.google.code.gson:gson:2.8.8'
+    implementation 'com.fazecast:jSerialComm:2.6.2'
 }
 
 javafx {
     version = "17"
-    modules = [ 'javafx.controls', 'javafx.fxml' ]
+    modules = ['javafx.controls', 'javafx.fxml']
 }
 
 application {
