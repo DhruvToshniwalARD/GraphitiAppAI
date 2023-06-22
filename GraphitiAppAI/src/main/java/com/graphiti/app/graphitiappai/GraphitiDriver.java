@@ -4,16 +4,19 @@ import com.fazecast.jSerialComm.SerialPort;
 import javafx.beans.property.SimpleObjectProperty;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
+import java.io.InputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.file.Files;
-import java.util.ArrayList;
+import java.nio.file.Paths;
 import java.util.Arrays;
-import java.util.List;
 
 public class GraphitiDriver {
     private SerialPort comPort;
-    private static final byte ESC = 0x1B;
+    private static final byte ESC = 0x1B; //change name
     private static final byte ACK = 0x51;
     private static final byte NACK = 0x52;
     private static final byte SET_CLEAR_DISPLAY = 0x16;  // Add this line
@@ -40,6 +43,7 @@ public class GraphitiDriver {
                 }
             }
         }
+
         // If the port is not found, return false
         return false;
     }
@@ -59,38 +63,101 @@ public class GraphitiDriver {
         return (byte) ((~sum + 1) & 0xFF);  // Two's complement
     }
 
+    public byte[] updateSinglePixel(int rowId, int columnId, int pixelValue, int blinkingRate) throws IOException {
+        byte commandId = 0x17; // Command ID for Update Single Pixel
+
+        byte[] commandData = new byte[4]; // 4 bytes for row ID, column ID, pixel value, blinking rate
+        commandData[0] = (byte) rowId;
+        commandData[1] = (byte) columnId;
+        commandData[2] = (byte) pixelValue;
+        commandData[3] = (byte) blinkingRate;
+
+        return sendCommand(commandId, commandData);
+    }
+
+    public byte[] sendImage(File imageFile) throws IOException {
+        // Use StringBuilder to keep track of data being sent
+        StringBuilder sequenceData = new StringBuilder();
+
+        // Get image size
+        int imageSize = (int) imageFile.length();
+
+        // Get image name
+        String imageName = imageFile.getName();
+
+        /*if (imageName.length() > 255) {
+            // Truncate image name or throw an exception
+            imageName = imageName.substring(0, 255);
+        }*/
+
+        // Create initial command sequence
+        byte[] command = new byte[2 + imageName.length() + 1 + 4]; // ESC, command ID, Image name, separator, size
+        command[0] = ESC;
+        command[1] = 0x30;
+        System.arraycopy(imageName.getBytes(), 0, command, 2, imageName.length());
+        command[imageName.length() + 2] = '|';
+
+        sequenceData.append(Arrays.toString(command) + "\n"); // Append command to sequenceData
+
+        // Add image size to command
+        command[imageName.length() + 3] = (byte) ((imageSize >> 24) & 0xFF);
+        command[imageName.length() + 4] = (byte) ((imageSize >> 16) & 0xFF);
+        command[imageName.length() + 5] = (byte) ((imageSize >> 8) & 0xFF);
+        command[imageName.length() + 6] = (byte) (imageSize & 0xFF);
+
+
+        // Read image data
+        byte[] imageData = Files.readAllBytes(imageFile.toPath());
+
+        sequenceData.append(Arrays.toString(imageData) + "\n"); // Append image data to sequenceData
+
+        // Send command sequence
+        this.comPort.writeBytes(command, command.length);
+
+        // Send image data
+        this.comPort.writeBytes(imageData, imageData.length);
+
+        Files.write(Paths.get("imagedata.txt"), imageData);
+
+        // Calculate checksum for the command and imageData
+        byte[] combinedData = new byte[command.length + imageData.length];
+        System.arraycopy(command, 0, combinedData, 0, command.length);
+        System.arraycopy(imageData, 0, combinedData, command.length, imageData.length);
+        byte checksum = calculateChecksum(combinedData, 1, combinedData.length - 1);
+
+        sequenceData.append("Checksum: " + checksum + "\n"); // Append checksum to sequenceData
+
+        // Send checksum
+        byte[] checksumArr = new byte[]{checksum};
+        this.comPort.writeBytes(checksumArr, checksumArr.length);
+
+        // Wait for response (assuming response is 4 bytes: SOF, RESPONSE, error code, checksum)
+        byte[] response = new byte[4];
+        this.comPort.readBytes(response, 4);
+
+        sequenceData.append("Response: " + Arrays.toString(response) + "\n"); // Append response to sequenceData
+
+        processResponse(response);
+
+        // Write the sequenceData to a file
+        Files.write(Paths.get("sequenceData.txt"), sequenceData.toString().getBytes());
+
+        return response;
+    }
+
+
     public byte[] sendCommand(byte commandID, byte[] commandData) throws IOException {
-        if (!this.comPort.isOpen()) {
+
+        if (!this.isConnected()) { // Check the connection before sending the command
             throw new IOException("Port is not open");
         }
 
-        // Create a byte list to handle potential duplicate SOF bytes in commandData
-        List<Byte> commandList = new ArrayList<>();
-        commandList.add(ESC);
-        commandList.add(commandID);
-        int checksumCount = 2;  // commandID and checksum byte count for checksum calculation
-        for (byte data : commandData) {
-            commandList.add(data);
-            checksumCount++;
-            if (data == ESC) { // If data byte equals SOF, add it again
-                commandList.add(data);
-            }
-        }
-        // Convert commandList back to array
-        byte[] command = new byte[commandList.size() + 1];  // +1 for checksum
-        for (int i = 0; i < commandList.size(); i++) {
-            command[i] = commandList.get(i);
-        }
-
-        // Calculate checksum (ignoring the extra SOF bytes)
-        command[command.length - 1] = calculateChecksum(command, 1, checksumCount);
-
-        // If checksum equals SOF, add it again
-        if (command[command.length - 1] == ESC) {
-            byte[] extendedCommand = Arrays.copyOf(command, command.length + 1);
-            extendedCommand[extendedCommand.length - 1] = command[command.length - 1];
-            command = extendedCommand;
-        }
+        // Create command with space for SOF, command ID, command data, checksum
+        byte[] command = new byte[2 + commandData.length + 1];
+        command[0] = ESC;
+        command[1] = commandID;
+        System.arraycopy(commandData, 0, command, 2, commandData.length);
+        command[command.length - 1] = calculateChecksum(command, 1, commandData.length + 1);  // commandID + commandData
 
         // Send command
         this.comPort.writeBytes(command, command.length);
@@ -102,71 +169,61 @@ public class GraphitiDriver {
         // Validate response
         byte checksum = calculateChecksum(response, 0, 1);
         if (checksum != response[1]) {
-            // Handle checksum error
-            System.out.println("Checksum Error from Graphiti. Resending the command...");
-            return sendCommand(commandID, commandData); // Resend the command if Checksum Error is received
+            // Handle checksum error, e.g., resend command
+            throw new IOException("Response checksum error");
         }
 
-        // Process response according to common responses in VCP mode
-        byte responseId = response[0];
-        switch (responseId) {
-            case 0x53: // Common responses
-                switch (response[1]) {
-                    case 0x00:
-                        System.out.println("Command Successful");
-                        break;
-                    case 0x01:
-                        System.out.println("Command Error. Resending the command...");
-                        return sendCommand(commandID, commandData); // Resend the command if Command Error is received
-                    case 0x02:
-                        System.out.println("Communication Error. Please check the device.");
-                        break;
-                    case 0x03:
-                        System.out.println("Checksum Error from Graphiti. Resending the command...");
-                        return sendCommand(commandID, commandData); // Resend the command if Checksum Error is received
-                    case 0x04:
-                        System.out.println("Invalid Image API Error. Please check the image file and try again.");
-                        break;
-                    case 0x05:
-                        System.out.println("Image API Time Out Error. Resending the command...");
-                        return sendCommand(commandID, commandData); // Resend the command if Image API Time Out Error is received
-                    default:
-                        System.out.println("Unknown error. Response byte: " + response[1]);
-                        break;
-                }
-                break;
-            case ACK:
-                System.out.println("Received ACK from Graphiti");
-                break;
-            case NACK:
-                System.out.println("Received NACK from Graphiti. Resending the command...");
-                return sendCommand(commandID, commandData); // Resend the command if NACK is received
-            default:
-                System.out.println("Unexpected response. Response byte: " + responseId);
-                break;
+        // Check if the response is ACK or NACK
+        if (response[0] == ACK) {
+            System.out.println("Received ACK from Graphiti");
+            // Process response as needed
+        } else if (response[0] == NACK) {
+            System.out.println("Received NACK from Graphiti. Resending the command...");
+            return sendCommand(commandID, commandData); // Resend the command if NACK is received
         }
 
         return response;
     }
 
-    public byte[] sendImageFile(String imagePath, boolean interruptible) throws IOException {
-        byte commandId = interruptible ? (byte) 0x2F : (byte) 0x30; // Command ID for interruptible or blocking send image command
+    public byte[] getAllPixelsPositionStatus() throws IOException {
+        byte commandID = 0x20; // Command ID for Get All Pixels Position Status
+        return sendCommand(commandID, new byte[0]);
+    }
 
-        // Get file name with extension
-        File imageFile = new File(imagePath);
-        String fileName = imageFile.getName();
+    public byte[] setTouchEvent(boolean enable) throws IOException {
+        byte commandID = 0x41; // Command ID for Set Touch Event
+        byte[] commandData = new byte[1];
+        commandData[0] = (byte) (enable ? 0x01 : 0x00); // Set touch event enable or disable
+        return sendCommand(commandID, commandData);
+    }
 
-        // Read image file into byte array
-        byte[] imageData = Files.readAllBytes(imageFile.toPath());
+    public byte[] getLastTouchPointStatus() throws IOException {
+        byte commandID = 0x44; // Command ID for Get Last Touch Point Status
+        return sendCommand(commandID, new byte[0]);
+    }
 
-        // Prepare command data: file name + separator + image size + image data
-        byte[] commandData = new byte[fileName.length() + 1 + 4 + imageData.length];
-        System.arraycopy(fileName.getBytes(), 0, commandData, 0, fileName.length());
-        commandData[fileName.length()] = '|';
-        ByteBuffer.wrap(commandData, fileName.length() + 1, 4).putInt(imageData.length);
-        System.arraycopy(imageData, 0, commandData, fileName.length() + 1 + 4, imageData.length);
 
-        return sendCommand(commandId, commandData);
+    public String processResponse(byte[] response) {
+        if (response.length != 4 || response[0] != ESC || response[1] != 0x53) {
+            return "Unexpected response format";
+        }
+
+        switch (response[2]) {
+            case 0x00:
+                return "Command Successful";
+            case 0x01:
+                return "Command Error";
+            case 0x02:
+                return "Communication Error";
+            case 0x03:
+                return "Checksum Error";
+            case 0x04:
+                return "Invalid Image API Error";
+            case 0x05:
+                return "Image API Time Out Error";
+            default:
+                return "Unknown response code";
+        }
     }
 
 

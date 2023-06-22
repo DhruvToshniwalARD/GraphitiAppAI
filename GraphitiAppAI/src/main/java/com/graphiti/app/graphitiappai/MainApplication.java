@@ -14,7 +14,7 @@ public class MainApplication extends Application {
     public void start(Stage stage) throws IOException {
         FXMLLoader fxmlLoader = new FXMLLoader(MainApplication.class.getResource("hello-view.fxml"));
         Scene scene = new Scene(fxmlLoader.load(), 320, 240);
-        stage.setTitle("Image Analyzer");
+        stage.setTitle("Graphiti Image Analyzer");
         stage.setScene(scene);
         stage.show();
         stage.setFullScreen(true);

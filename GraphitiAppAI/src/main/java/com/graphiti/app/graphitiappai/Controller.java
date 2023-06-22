@@ -47,10 +47,11 @@ public class Controller {
     private GraphitiDriver driver = new GraphitiDriver();
     private JsonObject objectInfo; // JSON object for storing object detection information
 
+
     @FXML
     public void initialize() {
-        listenForUSBConnection();
         this.imageView = new ImageView();
+        listenForUSBConnection();
         // this.canvas = new Canvas(500, 500); // Initialize Canvas with arbitrary size
         // checkConnectionStatus();
     }
@@ -75,11 +76,52 @@ public class Controller {
         if (driver.isConnected()) {
             connectionStatus.setText("Connected");
             connectionStatus.setTextFill(Color.GREEN);
+            //feedbackLabel.setText("");
         } else {
             connectionStatus.setText("Not connected");
             connectionStatus.setTextFill(Color.RED);
+            //feedbackLabel.setText("Graphiti device not connected. Can't send image.");
         }
     }
+
+    private void checkPinHover() throws IOException {
+        driver.setTouchEvent(true);
+        usbListenerExecutor = Executors.newSingleThreadExecutor();
+        usbListenerExecutor.submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                if (driver.isConnected()) {
+                    try {
+                        byte[] response = driver.getLastTouchPointStatus();
+                        if (response.length > 0) { // if there is some data received from the device
+                            // assuming response bytes 2 and 3 represent the row and column ID of the pin
+                            int rowId = Byte.toUnsignedInt(response[2]);
+                            int columnId = Byte.toUnsignedInt(response[3]);
+                            // assuming response byte 4 represents the height of the pin
+                            int pinHeight = Byte.toUnsignedInt(response[4]);
+
+                            Platform.runLater(() -> {
+                                // update the label with the rowId, columnId, and pinHeight
+                                feedbackLabel.setText("Pin Row ID: " + rowId + ", Pin Column ID: " + columnId + ", Pin Height: " + pinHeight);
+                            });
+                        } else {
+                            // clear the label if there is no data received from the device
+                            Platform.runLater(() -> feedbackLabel.setText(""));
+                        }
+                    } catch (IOException e) {
+                        System.out.println("An error occurred while getting the last touch point status: " + e.getMessage());
+                    }
+                }
+
+                try {
+                    // Check for pin hover every second
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+    }
+
 
     @FXML
     protected void onUploadButtonClick() {
@@ -95,8 +137,14 @@ public class Controller {
 
                 // Check if Graphiti is connected and send image
                 if (driver.isConnected()) {
-                    // Send image to Graphiti device
-                    driver.sendImageFile(selectedFile.getPath(), true);  // You might need to adjust the second parameter according to your needs
+                    try {
+                        //driver.setOrClearDisplay(false);
+                        byte[] response = driver.sendImage(this.selectedFile);
+                        String responseMessage = driver.processResponse(response);
+                        System.out.println(responseMessage);
+                    } catch (IOException e) {
+                        System.out.println("An error occurred while sending the command: " + e.getMessage());
+                    }
                 } else {
                     System.out.println("Graphiti device not connected. Can't send image.");
                 }
@@ -176,7 +224,7 @@ public class Controller {
             System.out.println("No file selected.");
             return;
         }
-
+        //checkPinHover();
         feedbackLabel.setText("");
         detectAndDisplayObjects();
     }
@@ -198,6 +246,19 @@ public class Controller {
             Image image = new Image("file:" + selectedFile.getPath());
             GraphicsContext gc = canvas.getGraphicsContext2D();
             gc.drawImage(image, 0, 0, canvas.getWidth(), canvas.getHeight());
+
+            for (JsonElement object : objectInfo.getAsJsonArray("objects")) {
+                JsonObject boundingBox = object.getAsJsonObject().getAsJsonObject("rectangle");
+
+                double x = boundingBox.get("x").getAsDouble() * canvas.getWidth() / image.getWidth();
+                double y = boundingBox.get("y").getAsDouble() * canvas.getHeight() / image.getHeight();
+                double w = boundingBox.get("w").getAsDouble() * canvas.getWidth() / image.getWidth();
+                double h = boundingBox.get("h").getAsDouble() * canvas.getHeight() / image.getHeight();
+
+                gc.setStroke(Color.RED);
+                gc.setLineWidth(2);
+                gc.strokeRect(x, y, w, h);
+            }
 
             canvas.setOnMouseMoved(event -> {
                 String objectName = "";
@@ -223,6 +284,7 @@ public class Controller {
             canvas.setOnMouseExited(event -> feedbackLabel.setText(""));
         }
     }
+
 
     public void shutdown() {
         if (usbListenerExecutor != null) {
