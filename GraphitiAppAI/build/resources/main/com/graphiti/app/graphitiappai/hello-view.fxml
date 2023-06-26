@@ -12,9 +12,9 @@
 
     <Button fx:id="uploadButton" text="Upload File" onAction="#onUploadButtonClick"/>
     <Button fx:id="describeButton" text="Describe Image" onAction="#onDescribeButtonClick"/>
+    <Label fx:id="feedbackLabel" text=""/>
     <Button fx:id="feedbackButton" text="Interactive Feedback" onAction="#onFeedbackButtonClick"/>
 
     <Canvas fx:id="canvas" width="800" height="600"/>
-    <Label fx:id="feedbackLabel" text=""/>
     <Label fx:id="connectionStatus" text="Not connected"/>
 </VBox>

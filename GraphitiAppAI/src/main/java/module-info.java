@@ -5,6 +5,8 @@ module com.graphiti.app.graphitiappai {
     requires com.google.gson;
     // requires comm;
     requires com.fazecast.jSerialComm;
+    requires java.desktop;
+    // requires freetts;
     // requires javax.usb;
 
     opens com.graphiti.app.graphitiappai to javafx.fxml;

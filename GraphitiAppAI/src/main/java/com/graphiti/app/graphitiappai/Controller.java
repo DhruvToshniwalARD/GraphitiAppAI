@@ -1,5 +1,6 @@
 package com.graphiti.app.graphitiappai;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -21,6 +22,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -41,7 +44,7 @@ public class Controller {
     private Canvas canvas;
     @FXML
     private Label feedbackLabel;
-
+    private ExecutorService feedbackExecutor;
     private File selectedFile;
     private ExecutorService usbListenerExecutor;
     private GraphitiDriver driver = new GraphitiDriver();
@@ -52,8 +55,6 @@ public class Controller {
     public void initialize() {
         this.imageView = new ImageView();
         listenForUSBConnection();
-        // this.canvas = new Canvas(500, 500); // Initialize Canvas with arbitrary size
-        // checkConnectionStatus();
     }
 
     private void listenForUSBConnection() {
@@ -84,48 +85,11 @@ public class Controller {
         }
     }
 
-    private void checkPinHover() throws IOException {
-        driver.setTouchEvent(true);
-        usbListenerExecutor = Executors.newSingleThreadExecutor();
-        usbListenerExecutor.submit(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                if (driver.isConnected()) {
-                    try {
-                        byte[] response = driver.getLastTouchPointStatus();
-                        if (response.length > 0) { // if there is some data received from the device
-                            // assuming response bytes 2 and 3 represent the row and column ID of the pin
-                            int rowId = Byte.toUnsignedInt(response[2]);
-                            int columnId = Byte.toUnsignedInt(response[3]);
-                            // assuming response byte 4 represents the height of the pin
-                            int pinHeight = Byte.toUnsignedInt(response[4]);
-
-                            Platform.runLater(() -> {
-                                // update the label with the rowId, columnId, and pinHeight
-                                feedbackLabel.setText("Pin Row ID: " + rowId + ", Pin Column ID: " + columnId + ", Pin Height: " + pinHeight);
-                            });
-                        } else {
-                            // clear the label if there is no data received from the device
-                            Platform.runLater(() -> feedbackLabel.setText(""));
-                        }
-                    } catch (IOException e) {
-                        System.out.println("An error occurred while getting the last touch point status: " + e.getMessage());
-                    }
-                }
-
-                try {
-                    // Check for pin hover every second
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        });
-    }
-
-
     @FXML
     protected void onUploadButtonClick() {
         FileChooser fileChooser = new FileChooser();
+        FileChooser.ExtensionFilter extFilter = new FileChooser.ExtensionFilter("Image Files", "*.jpeg", "*.jpg", "*.png");
+        fileChooser.getExtensionFilters().add(extFilter);
         this.selectedFile = fileChooser.showOpenDialog(null);
 
         if (this.selectedFile != null) {
@@ -139,9 +103,7 @@ public class Controller {
                 if (driver.isConnected()) {
                     try {
                         //driver.setOrClearDisplay(false);
-                        byte[] response = driver.sendImage(this.selectedFile);
-                        String responseMessage = driver.processResponse(response);
-                        System.out.println(responseMessage);
+                        driver.sendImage(this.selectedFile);
                     } catch (IOException e) {
                         System.out.println("An error occurred while sending the command: " + e.getMessage());
                     }
@@ -205,6 +167,7 @@ public class Controller {
     }
 
     private JsonObject detectObjects() throws IOException, InterruptedException {
+        System.out.println("Debug: Sending HTTP request for object detection...");
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(AppConfig.ENDPOINT + "/vision/v3.0/analyze?visualFeatures=Objects"))
@@ -214,7 +177,7 @@ public class Controller {
                 .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
+        System.out.println("Debug: Object detection response: " + response.body());
         return JsonParser.parseString(response.body()).getAsJsonObject();
     }
 
@@ -224,9 +187,110 @@ public class Controller {
             System.out.println("No file selected.");
             return;
         }
-        //checkPinHover();
+
         feedbackLabel.setText("");
         detectAndDisplayObjects();
+        driver.setTouchEvent(true);
+
+        // Calculate bounding boxes for the downsampled image
+        Image image = new Image("file:" + selectedFile.getPath());
+        Map<String, JsonObject> downsampledBoundingBoxes = calculateBoundingBoxesForDownsampledImage(image.getWidth(), image.getHeight());
+
+        feedbackExecutor = Executors.newSingleThreadExecutor();
+        feedbackExecutor.submit(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    String touchedObjectName = "";
+                    String pinInfo = "";
+
+                    // Keep calling getLastTouchEvent until the response starts with 68
+                    do {
+                        pinInfo = driver.getPinInfo(driver.getLastTouchEvent());
+                    } while (!pinInfo.split(" ")[0].equals("68") || Integer.parseInt(pinInfo.split(" ")[3]) <= 0);
+
+                    String[] pinInfoParts = pinInfo.split(" ");
+                    double pinX = Double.parseDouble(pinInfoParts[1]);  // column ID
+                    double pinY = Double.parseDouble(pinInfoParts[2]);  // row ID
+                    double pinH = Double.parseDouble(pinInfoParts[3]);
+                    for (Map.Entry<String, JsonObject> entry : downsampledBoundingBoxes.entrySet()) {
+                        JsonObject boundingBox = entry.getValue();
+
+                        double x = boundingBox.get("x").getAsDouble();
+                        double y = boundingBox.get("y").getAsDouble();
+                        double w = boundingBox.get("w").getAsDouble();
+                        double h = boundingBox.get("h").getAsDouble();
+
+                        if (pinX >= x && pinX <= x + w &&
+                                pinY >= y && pinY <= y + h) {
+                            touchedObjectName = entry.getKey();
+                            break;
+                        }
+                    }
+
+                    final String finalTouchedObjectName = touchedObjectName;
+                    Platform.runLater(() -> feedbackLabel.setText(finalTouchedObjectName));
+
+                    Thread.sleep(100); // set delay as per requirement
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+    }
+
+
+    private Map<String, JsonObject> calculateBoundingBoxesForDownsampledImage(double originalWidth, double originalHeight) {
+        System.out.println("Debug: Original image width and height: " + originalWidth + ", " + originalHeight);
+
+        if (objectInfo == null) {
+            System.out.println("Debug: objectInfo is null");
+            return new HashMap<>();
+        }
+        JsonArray objectsArray = objectInfo.getAsJsonArray("objects");
+        if (objectsArray == null) {
+            System.out.println("Debug: objectsArray is null");
+            return new HashMap<>();
+        }
+
+        Map<String, JsonObject> boundingBoxes = new HashMap<>();
+        double downsampledWidth = 40.0;
+        double downsampledHeight = 60.0;
+        System.out.println("Debug: Downsampled image width and height: " + downsampledWidth + ", " + downsampledHeight);
+
+        for (JsonElement object : objectsArray) {
+            System.out.println("Debug: Processing object: " + object.toString());
+            if (object == null || !object.getAsJsonObject().has("rectangle")) {
+                System.out.println("Debug: object or its rectangle is null");
+                continue;
+            }
+            JsonObject boundingBox = object.getAsJsonObject().getAsJsonObject("rectangle");
+
+            if (!(boundingBox.has("x") && boundingBox.has("y") && boundingBox.has("w") && boundingBox.has("h"))) {
+                System.out.println("Debug: boundingBox does not have all properties");
+                continue;
+            }
+
+            double x = (boundingBox.get("x").getAsDouble() * downsampledWidth / originalWidth);
+            double y = (boundingBox.get("y").getAsDouble() * downsampledHeight / originalHeight);
+            double w = boundingBox.get("w").getAsDouble() * downsampledWidth / originalWidth;
+            double h = boundingBox.get("h").getAsDouble() * downsampledHeight / originalHeight;
+
+
+            System.out.println("Debug: Original bounding box (x,y,w,h): " + boundingBox.get("x").getAsDouble() + "," + boundingBox.get("y").getAsDouble() + "," + boundingBox.get("w").getAsDouble() + "," + boundingBox.get("h").getAsDouble());
+            System.out.println("Debug: Downsampled bounding box (x,y,w,h): " + x + "," + y + "," + w + "," + h);
+
+            JsonObject downsampledBoundingBox = new JsonObject();
+            downsampledBoundingBox.addProperty("x", x);
+            downsampledBoundingBox.addProperty("y", y);
+            downsampledBoundingBox.addProperty("w", w);
+            downsampledBoundingBox.addProperty("h", h);
+
+            boundingBoxes.put(object.getAsJsonObject().get("object").getAsString(), downsampledBoundingBox);
+        }
+
+        return boundingBoxes;
     }
 
     private void detectAndDisplayObjects() throws IOException, InterruptedException {
@@ -237,10 +301,9 @@ public class Controller {
                 .header("Ocp-Apim-Subscription-Key", AppConfig.SUBSCRIPTION_KEY)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(Files.readAllBytes(selectedFile.toPath())))
                 .build();
-
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        JsonObject objectInfo = JsonParser.parseString(response.body()).getAsJsonObject();
+        objectInfo = JsonParser.parseString(response.body()).getAsJsonObject();
 
         if (objectInfo != null && objectInfo.has("objects")) {
             Image image = new Image("file:" + selectedFile.getPath());
@@ -289,6 +352,9 @@ public class Controller {
     public void shutdown() {
         if (usbListenerExecutor != null) {
             usbListenerExecutor.shutdownNow();
+        }
+        if (feedbackExecutor != null) {
+            feedbackExecutor.shutdownNow();
         }
     }
 }

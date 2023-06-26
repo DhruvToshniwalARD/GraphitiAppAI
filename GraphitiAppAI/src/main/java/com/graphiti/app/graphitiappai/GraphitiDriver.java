@@ -1,14 +1,11 @@
 package com.graphiti.app.graphitiappai;
 
 import com.fazecast.jSerialComm.SerialPort;
-import javafx.beans.property.SimpleObjectProperty;
 
+import java.awt.geom.AffineTransform;
+import java.awt.image.AffineTransformOp;
+import java.awt.image.BufferedImage;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -22,6 +19,8 @@ public class GraphitiDriver {
     private static final byte SET_CLEAR_DISPLAY = 0x16;  // Add this line
     private static final byte SET_DISPLAY = 0x02;  // Add this line
     private static final byte CLEAR_DISPLAY = 0x03;
+    private static final byte SET_TOUCH_EVENT = 0x41;  // set event command ID
+    private static final byte GET_LAST_TOUCH_EVENT = 0x44;  // last touch event command ID
 
     public boolean isConnected() {
         if (comPort != null && comPort.isOpen()) {
@@ -46,6 +45,27 @@ public class GraphitiDriver {
 
         // If the port is not found, return false
         return false;
+    }
+
+    private BufferedImage downsampleImage(BufferedImage originalImage, double targetWidth, double targetHeight) {
+        BufferedImage downsampledImage = new BufferedImage((int) targetWidth, (int) targetHeight, originalImage.getType());
+        AffineTransform at = new AffineTransform();
+        at.scale(targetWidth / originalImage.getWidth(), targetHeight / originalImage.getHeight());
+        AffineTransformOp scaleOp = new AffineTransformOp(at, AffineTransformOp.TYPE_BILINEAR);
+        downsampledImage = scaleOp.filter(originalImage, downsampledImage);
+        return downsampledImage;
+    }
+
+
+    public int[][] getCoordinateMapping(BufferedImage downsampledImage) {
+        // Placeholder logic to assign object IDs. Replace this with actual logic based on your requirements
+        int[][] mapping = new int[60][40];
+        for (int i = 0; i < 60; i++) {
+            for (int j = 0; j < 40; j++) {
+                mapping[i][j] = downsampledImage.getRGB(i, j); // Example logic
+            }
+        }
+        return mapping;
     }
 
 
@@ -75,7 +95,7 @@ public class GraphitiDriver {
         return sendCommand(commandId, commandData);
     }
 
-    public byte[] sendImage(File imageFile) throws IOException {
+    public void sendImage(File imageFile) throws IOException {
         // Use StringBuilder to keep track of data being sent
         StringBuilder sequenceData = new StringBuilder();
 
@@ -85,10 +105,10 @@ public class GraphitiDriver {
         // Get image name
         String imageName = imageFile.getName();
 
-        /*if (imageName.length() > 255) {
+        if (imageName.length() > 255) {
             // Truncate image name or throw an exception
             imageName = imageName.substring(0, 255);
-        }*/
+        }
 
         // Create initial command sequence
         byte[] command = new byte[2 + imageName.length() + 1 + 4]; // ESC, command ID, Image name, separator, size
@@ -141,8 +161,7 @@ public class GraphitiDriver {
 
         // Write the sequenceData to a file
         Files.write(Paths.get("sequenceData.txt"), sequenceData.toString().getBytes());
-
-        return response;
+        System.out.println(processResponse(response));
     }
 
 
@@ -181,27 +200,9 @@ public class GraphitiDriver {
             System.out.println("Received NACK from Graphiti. Resending the command...");
             return sendCommand(commandID, commandData); // Resend the command if NACK is received
         }
-
+        processResponse(response);
         return response;
     }
-
-    public byte[] getAllPixelsPositionStatus() throws IOException {
-        byte commandID = 0x20; // Command ID for Get All Pixels Position Status
-        return sendCommand(commandID, new byte[0]);
-    }
-
-    public byte[] setTouchEvent(boolean enable) throws IOException {
-        byte commandID = 0x41; // Command ID for Set Touch Event
-        byte[] commandData = new byte[1];
-        commandData[0] = (byte) (enable ? 0x01 : 0x00); // Set touch event enable or disable
-        return sendCommand(commandID, commandData);
-    }
-
-    public byte[] getLastTouchPointStatus() throws IOException {
-        byte commandID = 0x44; // Command ID for Get Last Touch Point Status
-        return sendCommand(commandID, new byte[0]);
-    }
-
 
     public String processResponse(byte[] response) {
         if (response.length != 4 || response[0] != ESC || response[1] != 0x53) {
@@ -226,6 +227,53 @@ public class GraphitiDriver {
         }
     }
 
+    // Set touch event method
+    public void setTouchEvent(boolean enable) throws IOException {
+
+        if (!isConnected())
+            System.out.println("Not connected");
+
+        else {
+            byte[] command = new byte[4];
+            command[0] = ESC;
+            command[1] = SET_TOUCH_EVENT;
+            command[2] = (byte) (enable ? 0x01 : 0x00);
+            command[3] = (byte) (enable ? 0xBE : 0xBF);
+            this.comPort.writeBytes(command, command.length);
+
+            byte[] response = new byte[4];
+            this.comPort.readBytes(response, 4);
+        }
+
+
+        //System.out.println(response[2] == 0x00 ? (enable == false ? "Successful" : "Not successful") : (enable == true ? "Successful" : "Not successful"));
+    }
+
+
+    // Get last touch event method
+    public byte[] getLastTouchEvent() throws IOException {
+
+        byte[] command = new byte[3];
+        command[0] = ESC;
+        command[1] = GET_LAST_TOUCH_EVENT;
+        command[2] = (byte) 0xBC;
+
+        this.comPort.writeBytes(command, command.length);
+
+        byte[] response = new byte[6];
+        this.comPort.readBytes(response, 6);
+
+        return response;  // No additional data needed for this command
+    }
+
+    public String getPinInfo(byte[] response) {
+        if (response.length >= 6) {
+            String pinInfo = response[0] + " " + response[1] + " " + response[2] + " " + response[3] + " " + response[4] + " " + response[5] + " ";
+            return pinInfo;
+        } else {
+            return "Invalid response format";
+        }
+    }
 
     // Send ACK command to the Graphiti device
     public byte[] sendAck() throws IOException {
