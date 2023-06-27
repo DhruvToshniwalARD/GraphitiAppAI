@@ -21,6 +21,8 @@ public class GraphitiDriver {
     private static final byte CLEAR_DISPLAY = 0x03;
     private static final byte SET_TOUCH_EVENT = 0x41;  // set event command ID
     private static final byte GET_LAST_TOUCH_EVENT = 0x44;  // last touch event command ID
+    private static final byte SET_KEY_EVENT = 0x31;  // New command ID for setting key event
+
 
     public boolean isConnected() {
         if (comPort != null && comPort.isOpen()) {
@@ -67,7 +69,6 @@ public class GraphitiDriver {
         }
         return mapping;
     }
-
 
     public byte[] setOrClearDisplay(boolean setDisplay) throws IOException {
         byte[] commandData = new byte[1];
@@ -264,6 +265,114 @@ public class GraphitiDriver {
         this.comPort.readBytes(response, 6);
 
         return response;  // No additional data needed for this command
+    }
+
+    public byte[] setKeyEvent(boolean enable) throws IOException {
+        byte[] command = new byte[4];
+        command[0] = ESC;
+        command[1] = SET_KEY_EVENT;
+        command[2] = (byte) (enable ? 0x01 : 0x00);
+        command[3] = (byte) (enable ? 0xCE : 0xCF);
+
+
+        this.comPort.writeBytes(command, command.length);
+        byte[] response = new byte[4];
+        this.comPort.readBytes(response, 4);
+        return response;
+    }
+
+    public String interpretKeyPress(byte[] response) {
+        if (response.length == 6 && response[0] == 0x1B && response[1] == 0x32) {
+            int keyValue = (response[2] << 8) | (response[3] & 0xFF);
+            int keyPressType = response[4];
+            int checksum = response[5] & 0xFF;
+
+            // Calculate the checksum to validate the response
+            int calculatedChecksum = ~(response[0] + response[1] + response[2] + response[3] + response[4]) + 1 & 0xFF;
+
+            if (checksum != calculatedChecksum) {
+                return "Invalid checksum";
+            }
+
+            // Decode the key value
+            String keyName;
+            switch (keyValue) {
+                case 0x1000:
+                    keyName = "DOT 1";
+                    break;
+                case 0x2000:
+                    keyName = "DOT 2";
+                    break;
+                case 0x4000:
+                    keyName = "DOT 3";
+                    break;
+                case 0x8000:
+                    keyName = "DOT 7";
+                    break;
+                case 0x0100:
+                    keyName = "DOT 4";
+                    break;
+                case 0x0200:
+                    keyName = "DOT 5";
+                    break;
+                case 0x0400:
+                    keyName = "DOT 6";
+                    break;
+                case 0x0800:
+                    keyName = "DOT 8";
+                    break;
+                case 0x0010:
+                    keyName = "Up";
+                    break;
+                case 0x0020:
+                    keyName = "Left";
+                    break;
+                case 0x0040:
+                    keyName = "Down";
+                    break;
+                case 0x0080:
+                    keyName = "Right";
+                    break;
+                case 0x0001:
+                    keyName = "Select";
+                    break;
+                case 0x0002:
+                    keyName = "Space";
+                    break;
+                default:
+                    keyName = "Unknown";
+            }
+
+            // Check if multiple keys are pressed
+            boolean isMultipleKeysPressed = false;
+            if (keyValue > 0xFFFF) {
+                isMultipleKeysPressed = true;
+            }
+
+            // Decode the key press type
+            String pressType;
+            switch (keyPressType) {
+                case 0x02:
+                    pressType = "Short Press";
+                    break;
+                default:
+                    pressType = "Unknown";
+            }
+
+            // Build the interpretation string
+            StringBuilder interpretation = new StringBuilder();
+            interpretation.append("Key Value: ");
+            if (isMultipleKeysPressed) {
+                interpretation.append("Multiple Keys Pressed");
+            } else {
+                interpretation.append(keyName);
+            }
+            interpretation.append(", Key Press Type: ").append(pressType);
+
+            return interpretation.toString();
+        } else {
+            return "Invalid response format";
+        }
     }
 
     public String getPinInfo(byte[] response) {

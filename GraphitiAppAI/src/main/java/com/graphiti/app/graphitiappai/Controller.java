@@ -6,14 +6,20 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
+import javafx.geometry.Insets;
+import javafx.scene.Node;
+import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.layout.GridPane;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.stage.FileChooser;
+import javafx.stage.Stage;
 
 import java.io.File;
 import java.io.IOException;
@@ -30,6 +36,7 @@ import java.util.concurrent.Executors;
 
 public class Controller {
 
+    private static int imageCount = 0;
     @FXML
     private Button uploadButton;
     @FXML
@@ -91,13 +98,11 @@ public class Controller {
         FileChooser.ExtensionFilter extFilter = new FileChooser.ExtensionFilter("Image Files", "*.jpeg", "*.jpg", "*.png");
         fileChooser.getExtensionFilters().add(extFilter);
         this.selectedFile = fileChooser.showOpenDialog(null);
-
         if (this.selectedFile != null) {
             feedbackLabel.setText("Current file: " + selectedFile.getName());
             try {
                 URI selectedFileURI = this.selectedFile.toURI();
                 Image image = new Image(selectedFileURI.toString());
-                this.displayImage(image);
 
                 // Check if Graphiti is connected and send image
                 if (driver.isConnected()) {
@@ -111,6 +116,12 @@ public class Controller {
                     System.out.println("Graphiti device not connected. Can't send image.");
                 }
 
+                // Display the image
+                displayImage(image);
+
+                // Reset the state of the application
+                resetState();
+
             } catch (IllegalArgumentException e) {
                 System.out.println("Invalid image file selected. Please select a valid image file.");
             } catch (Exception e) {
@@ -121,6 +132,7 @@ public class Controller {
             System.out.println("No file selected.");
         }
     }
+
 
 
     private void displayImage(Image image) {
@@ -138,9 +150,14 @@ public class Controller {
             return;
         }
 
+        // Stop the feedback executor if running
+        if (feedbackExecutor != null && !feedbackExecutor.isShutdown()) {
+            feedbackExecutor.shutdownNow();
+        }
+
         String description = describeImage();
         objectInfo = detectObjects();
-
+        System.out.print("Describe button " + objectInfo);
         if (description != null) {
             feedbackLabel.setText("Description: " + description);
         }
@@ -181,12 +198,61 @@ public class Controller {
         return JsonParser.parseString(response.body()).getAsJsonObject();
     }
 
+    private Stage getCoordinatesStage() {
+        Object userData = feedbackButton.getUserData();
+        if (userData instanceof Stage) {
+            return (Stage) userData;
+        } else {
+            return null;
+        }
+    }
+
+
     @FXML
     protected void onFeedbackButtonClick() throws IOException, InterruptedException {
         if (this.selectedFile == null) {
             System.out.println("No file selected.");
             return;
         }
+
+        // Check if the coordinates stage is already open
+        Stage coordinatesStage = getCoordinatesStage();
+        if (coordinatesStage != null) {
+            coordinatesStage.requestFocus();
+            return;
+        }
+
+        Stage primaryStage = (Stage) feedbackButton.getScene().getWindow();
+
+        // Create a new stage for the coordinates window
+        coordinatesStage = new Stage();
+        coordinatesStage.setTitle("Hovered Coordinates");
+
+        // Set the coordinates stage position and size
+        coordinatesStage.setX(primaryStage.getX() + primaryStage.getWidth() / 2);
+        coordinatesStage.setY(primaryStage.getY());
+        coordinatesStage.setWidth(primaryStage.getWidth() / 2);
+        coordinatesStage.setHeight(primaryStage.getHeight());
+
+        GridPane gridPane = new GridPane();
+        gridPane.setHgap(5);
+        gridPane.setVgap(5);
+        gridPane.setPadding(new Insets(10));
+
+        for (int row = 0; row < 60; row++) {
+            for (int col = 0; col < 40; col++) {
+                Circle circle = new Circle(4, Color.RED);
+                circle.setVisible(false);
+                gridPane.add(circle, row, col);
+            }
+        }
+
+        Scene coordinatesScene = new Scene(gridPane);
+        coordinatesStage.setScene(coordinatesScene);
+        coordinatesStage.show();
+
+        // Store the coordinates stage in the user data of the feedback button
+        feedbackButton.setUserData(coordinatesStage);
 
         feedbackLabel.setText("");
         detectAndDisplayObjects();
@@ -204,25 +270,39 @@ public class Controller {
                     String pinInfo = "";
 
                     // Keep calling getLastTouchEvent until the response starts with 68
+                    //byte[] lastTouchEvent;
                     do {
                         pinInfo = driver.getPinInfo(driver.getLastTouchEvent());
-                    } while (!pinInfo.split(" ")[0].equals("68") || Integer.parseInt(pinInfo.split(" ")[3]) <= 0);
-
+                    } while (!pinInfo.split(" ")[0].equals("68"));
                     String[] pinInfoParts = pinInfo.split(" ");
-                    double pinX = Double.parseDouble(pinInfoParts[1]);  // column ID
-                    double pinY = Double.parseDouble(pinInfoParts[2]);  // row ID
+                    double pinX = Double.parseDouble(pinInfoParts[2]);  // column ID
+                    double pinY = Double.parseDouble(pinInfoParts[1]);  // row ID
                     double pinH = Double.parseDouble(pinInfoParts[3]);
+
+                    // Update the circle's visibility based on the pin coordinates
+                    Platform.runLater(() -> {
+                        for (Node node : gridPane.getChildren()) {
+                            if (GridPane.getColumnIndex(node) == pinX && GridPane.getRowIndex(node) == pinY) {
+                                node.setVisible(true);
+                                break;
+                            }
+                        }
+                    });
+
                     for (Map.Entry<String, JsonObject> entry : downsampledBoundingBoxes.entrySet()) {
                         JsonObject boundingBox = entry.getValue();
 
-                        double x = boundingBox.get("x").getAsDouble();
+                        double x = boundingBox.get("x").getAsDouble() + 5;
                         double y = boundingBox.get("y").getAsDouble();
                         double w = boundingBox.get("w").getAsDouble();
                         double h = boundingBox.get("h").getAsDouble();
 
-                        if (pinX >= x && pinX <= x + w &&
-                                pinY >= y && pinY <= y + h) {
+                        if (pinY >= y && pinY < y + h &&
+                                pinX >= x && pinX < x + w) {
                             touchedObjectName = entry.getKey();
+                            System.out.println("Touched Object: " + touchedObjectName);
+                            System.out.println("Graphiti Device - Pin X: " + pinX + ", Pin Y: " + pinY);
+                            System.out.println("Downsampled Bounding Box - X: " + x + ", Y: " + y + ", W: " + w + ", H: " + h);
                             break;
                         }
                     }
@@ -255,9 +335,14 @@ public class Controller {
         }
 
         Map<String, JsonObject> boundingBoxes = new HashMap<>();
-        double downsampledWidth = 40.0;
-        double downsampledHeight = 60.0;
-        System.out.println("Debug: Downsampled image width and height: " + downsampledWidth + ", " + downsampledHeight);
+        double targetWidth = 60.0;
+        double targetHeight = 40.0;
+        System.out.println("Debug: Target image width and height: " + targetWidth + ", " + targetHeight);
+
+        double widthScaleFactor = targetWidth / originalWidth;
+        double heightScaleFactor = targetHeight / originalHeight;
+        double scaleFactor = Math.min(widthScaleFactor, heightScaleFactor);
+        System.out.println("Debug: Scale factor: " + scaleFactor);
 
         for (JsonElement object : objectsArray) {
             System.out.println("Debug: Processing object: " + object.toString());
@@ -272,11 +357,10 @@ public class Controller {
                 continue;
             }
 
-            double x = (boundingBox.get("x").getAsDouble() * downsampledWidth / originalWidth);
-            double y = (boundingBox.get("y").getAsDouble() * downsampledHeight / originalHeight);
-            double w = boundingBox.get("w").getAsDouble() * downsampledWidth / originalWidth;
-            double h = boundingBox.get("h").getAsDouble() * downsampledHeight / originalHeight;
-
+            double x = boundingBox.get("x").getAsDouble() * scaleFactor;
+            double y = boundingBox.get("y").getAsDouble() * scaleFactor;
+            double w = boundingBox.get("w").getAsDouble() * scaleFactor;
+            double h = boundingBox.get("h").getAsDouble() * scaleFactor;
 
             System.out.println("Debug: Original bounding box (x,y,w,h): " + boundingBox.get("x").getAsDouble() + "," + boundingBox.get("y").getAsDouble() + "," + boundingBox.get("w").getAsDouble() + "," + boundingBox.get("h").getAsDouble());
             System.out.println("Debug: Downsampled bounding box (x,y,w,h): " + x + "," + y + "," + w + "," + h);
@@ -293,6 +377,7 @@ public class Controller {
         return boundingBoxes;
     }
 
+
     private void detectAndDisplayObjects() throws IOException, InterruptedException {
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = HttpRequest.newBuilder()
@@ -304,7 +389,7 @@ public class Controller {
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
         objectInfo = JsonParser.parseString(response.body()).getAsJsonObject();
-
+        System.out.print("detect button " + objectInfo);
         if (objectInfo != null && objectInfo.has("objects")) {
             Image image = new Image("file:" + selectedFile.getPath());
             GraphicsContext gc = canvas.getGraphicsContext2D();
@@ -340,11 +425,30 @@ public class Controller {
                         break;
                     }
                 }
-
                 feedbackLabel.setText(objectName);
             });
 
             canvas.setOnMouseExited(event -> feedbackLabel.setText(""));
+        }
+    }
+
+    private void resetState() {
+        // Clear feedback label
+        feedbackLabel.setText("");
+
+        // Reset object info
+        objectInfo = null;
+
+        // Shutdown feedback executor if running
+        if (feedbackExecutor != null) {
+            feedbackExecutor.shutdownNow();
+        }
+
+        // Close coordinates stage if open
+        Stage coordinatesStage = getCoordinatesStage();
+        if (coordinatesStage != null) {
+            coordinatesStage.close();
+            feedbackButton.setUserData(null);
         }
     }
 

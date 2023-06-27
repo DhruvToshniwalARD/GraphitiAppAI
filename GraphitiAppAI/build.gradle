@@ -11,7 +11,6 @@ repositories {
 
 dependencies {
     implementation 'com.google.code.gson:gson:2.8.8'
-    implementation 'com.google.cloud:google-cloud-vision:2.0.4'
     implementation 'com.google.code.gson:gson:2.8.8'
     implementation 'com.fazecast:jSerialComm:2.6.2'
     implementation 'org.apache.logging.log4j:log4j-api:2.14.1'
@@ -36,3 +35,5 @@ shadowJar {
         attributes 'Main-Class': 'com.graphiti.app.graphitiappai.MainApplication'
     }
 }
+
+apply plugin: 'maven-publish'
