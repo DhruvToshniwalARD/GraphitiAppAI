@@ -32,6 +32,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 
 public class Controller {
@@ -132,7 +133,6 @@ public class Controller {
             System.out.println("No file selected.");
         }
     }
-
 
 
     private void displayImage(Image image) {
@@ -256,21 +256,19 @@ public class Controller {
 
         feedbackLabel.setText("");
         detectAndDisplayObjects();
+        driver.setKeyEvent(true);
         driver.setTouchEvent(true);
 
         // Calculate bounding boxes for the downsampled image
         Image image = new Image("file:" + selectedFile.getPath());
         Map<String, JsonObject> downsampledBoundingBoxes = calculateBoundingBoxesForDownsampledImage(image.getWidth(), image.getHeight());
-
         feedbackExecutor = Executors.newSingleThreadExecutor();
         feedbackExecutor.submit(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     String touchedObjectName = "";
                     String pinInfo = "";
-
                     // Keep calling getLastTouchEvent until the response starts with 68
-                    //byte[] lastTouchEvent;
                     do {
                         pinInfo = driver.getPinInfo(driver.getLastTouchEvent());
                     } while (!pinInfo.split(" ")[0].equals("68"));
@@ -300,9 +298,9 @@ public class Controller {
                         if (pinY >= y && pinY < y + h &&
                                 pinX >= x && pinX < x + w) {
                             touchedObjectName = entry.getKey();
-                            System.out.println("Touched Object: " + touchedObjectName);
-                            System.out.println("Graphiti Device - Pin X: " + pinX + ", Pin Y: " + pinY);
-                            System.out.println("Downsampled Bounding Box - X: " + x + ", Y: " + y + ", W: " + w + ", H: " + h);
+//                            System.out.println("Touched Object: " + touchedObjectName);
+//                            System.out.println("Graphiti Device - Pin X: " + pinX + ", Pin Y: " + pinY);
+//                            System.out.println("Downsampled Bounding Box - X: " + x + ", Y: " + y + ", W: " + w + ", H: " + h);
                             break;
                         }
                     }

@@ -13,26 +13,27 @@ import java.util.Arrays;
 
 public class GraphitiDriver {
     private SerialPort comPort;
-    private static final byte ESC = 0x1B; //change name
+    private static final byte ESC = 0x1B;
     private static final byte ACK = 0x51;
     private static final byte NACK = 0x52;
-    private static final byte SET_CLEAR_DISPLAY = 0x16;  // Add this line
-    private static final byte SET_DISPLAY = 0x02;  // Add this line
+    private static final byte SET_CLEAR_DISPLAY = 0x16;
+    private static final byte SET_DISPLAY = 0x02;
     private static final byte CLEAR_DISPLAY = 0x03;
-    private static final byte SET_TOUCH_EVENT = 0x41;  // set event command ID
-    private static final byte GET_LAST_TOUCH_EVENT = 0x44;  // last touch event command ID
-    private static final byte SET_KEY_EVENT = 0x31;  // New command ID for setting key event
+    private static final byte SET_TOUCH_EVENT = 0x41;
+    private static final byte GET_LAST_TOUCH_EVENT = 0x44;
+    private static final byte SET_KEY_EVENT = 0x31;
 
+    DataProcessingThread dataProcessingThread;
 
     public boolean isConnected() {
         if (comPort != null && comPort.isOpen()) {
             return true;
         }
 
-        // If the port is null or not open, try to find and open it
         SerialPort[] comPorts = SerialPort.getCommPorts();
         for (SerialPort port : comPorts) {
-            if (port.getSystemPortName().equals("COM3")) {
+            String response = isDesiredDevice(port);
+            if (response != null && port.getSystemPortName().equalsIgnoreCase(response)) {
                 this.comPort = port;
                 boolean opened = this.comPort.openPort();
                 if (opened) {
@@ -45,8 +46,25 @@ public class GraphitiDriver {
             }
         }
 
-        // If the port is not found, return false
         return false;
+    }
+
+    private String isDesiredDevice(SerialPort port) {
+        String portName = port.getDescriptivePortName();
+        if (portName.contains("COM")) {
+            int comIndex = portName.indexOf("COM");
+            if (comIndex != -1) {
+                int startIndex = comIndex + 3;
+                int endIndex = startIndex;
+                while (endIndex < portName.length() && Character.isDigit(portName.charAt(endIndex))) {
+                    endIndex++;
+                }
+                if (endIndex > startIndex) {
+                    return "COM" + portName.substring(startIndex, endIndex);
+                }
+            }
+        }
+        return null;
     }
 
     private BufferedImage downsampleImage(BufferedImage originalImage, double targetWidth, double targetHeight) {
@@ -54,17 +72,14 @@ public class GraphitiDriver {
         AffineTransform at = new AffineTransform();
         at.scale(targetWidth / originalImage.getWidth(), targetHeight / originalImage.getHeight());
         AffineTransformOp scaleOp = new AffineTransformOp(at, AffineTransformOp.TYPE_BILINEAR);
-        downsampledImage = scaleOp.filter(originalImage, downsampledImage);
-        return downsampledImage;
+        return scaleOp.filter(originalImage, downsampledImage);
     }
 
-
     public int[][] getCoordinateMapping(BufferedImage downsampledImage) {
-        // Placeholder logic to assign object IDs. Replace this with actual logic based on your requirements
         int[][] mapping = new int[60][40];
         for (int i = 0; i < 60; i++) {
             for (int j = 0; j < 40; j++) {
-                mapping[i][j] = downsampledImage.getRGB(i, j); // Example logic
+                mapping[i][j] = downsampledImage.getRGB(i, j);
             }
         }
         return mapping;
@@ -81,18 +96,16 @@ public class GraphitiDriver {
         for (int i = start; i < start + length; i++) {
             sum += data[i];
         }
-        return (byte) ((~sum + 1) & 0xFF);  // Two's complement
+        return (byte) ((~sum + 1) & 0xFF);
     }
 
     public byte[] updateSinglePixel(int rowId, int columnId, int pixelValue, int blinkingRate) throws IOException {
-        byte commandId = 0x17; // Command ID for Update Single Pixel
-
-        byte[] commandData = new byte[4]; // 4 bytes for row ID, column ID, pixel value, blinking rate
+        byte commandId = 0x17;
+        byte[] commandData = new byte[4];
         commandData[0] = (byte) rowId;
         commandData[1] = (byte) columnId;
         commandData[2] = (byte) pixelValue;
         commandData[3] = (byte) blinkingRate;
-
         return sendCommand(commandId, commandData);
     }
 
@@ -165,52 +178,43 @@ public class GraphitiDriver {
         System.out.println(processResponse(response));
     }
 
-
     public byte[] sendCommand(byte commandID, byte[] commandData) throws IOException {
-
-        if (!this.isConnected()) { // Check the connection before sending the command
+        if (!this.isConnected()) {
             throw new IOException("Port is not open");
         }
-
-        // Create command with space for SOF, command ID, command data, checksum
         byte[] command = new byte[2 + commandData.length + 1];
         command[0] = ESC;
         command[1] = commandID;
         System.arraycopy(commandData, 0, command, 2, commandData.length);
-        command[command.length - 1] = calculateChecksum(command, 1, commandData.length + 1);  // commandID + commandData
-
-        // Send command
+        command[command.length - 1] = calculateChecksum(command, 1, commandData.length + 1);
         this.comPort.writeBytes(command, command.length);
-
-        // Wait for response (assuming response is 2 bytes: ACK/NACK + checksum)
         byte[] response = new byte[2];
         this.comPort.readBytes(response, 2);
-
-        // Validate response
         byte checksum = calculateChecksum(response, 0, 1);
         if (checksum != response[1]) {
-            // Handle checksum error, e.g., resend command
             throw new IOException("Response checksum error");
         }
-
-        // Check if the response is ACK or NACK
         if (response[0] == ACK) {
             System.out.println("Received ACK from Graphiti");
-            // Process response as needed
         } else if (response[0] == NACK) {
             System.out.println("Received NACK from Graphiti. Resending the command...");
-            return sendCommand(commandID, commandData); // Resend the command if NACK is received
+            return sendCommand(commandID, commandData);
         }
         processResponse(response);
         return response;
     }
 
     public String processResponse(byte[] response) {
-        if (response.length != 4 || response[0] != ESC || response[1] != 0x53) {
+        if (response.length != 4 || response[0] != ESC) {
             return "Unexpected response format";
         }
-
-        switch (response[2]) {
+        byte responseCode = response[2];
+        byte checksum = response[3];
+        byte calculatedChecksum = calculateChecksum(response, 0, 2);
+        if (checksum != calculatedChecksum) {
+            return "Response checksum error";
+        }
+        switch (responseCode) {
             case 0x00:
                 return "Command Successful";
             case 0x01:
@@ -228,57 +232,53 @@ public class GraphitiDriver {
         }
     }
 
-    // Set touch event method
     public void setTouchEvent(boolean enable) throws IOException {
-
-        if (!isConnected())
+        if (!isConnected()) {
             System.out.println("Not connected");
-
-        else {
+        } else {
             byte[] command = new byte[4];
             command[0] = ESC;
             command[1] = SET_TOUCH_EVENT;
             command[2] = (byte) (enable ? 0x01 : 0x00);
             command[3] = (byte) (enable ? 0xBE : 0xBF);
             this.comPort.writeBytes(command, command.length);
-
             byte[] response = new byte[4];
             this.comPort.readBytes(response, 4);
         }
-
-
-        //System.out.println(response[2] == 0x00 ? (enable == false ? "Successful" : "Not successful") : (enable == true ? "Successful" : "Not successful"));
     }
 
-
-    // Get last touch event method
     public byte[] getLastTouchEvent() throws IOException {
-
         byte[] command = new byte[3];
         command[0] = ESC;
         command[1] = GET_LAST_TOUCH_EVENT;
         command[2] = (byte) 0xBC;
-
         this.comPort.writeBytes(command, command.length);
-
         byte[] response = new byte[6];
         this.comPort.readBytes(response, 6);
-
-        return response;  // No additional data needed for this command
+        return response;
     }
 
-    public byte[] setKeyEvent(boolean enable) throws IOException {
+    public void setKeyEvent(boolean enable) throws IOException {
         byte[] command = new byte[4];
         command[0] = ESC;
         command[1] = SET_KEY_EVENT;
         command[2] = (byte) (enable ? 0x01 : 0x00);
         command[3] = (byte) (enable ? 0xCE : 0xCF);
-
-
         this.comPort.writeBytes(command, command.length);
         byte[] response = new byte[4];
         this.comPort.readBytes(response, 4);
-        return response;
+        sendAck();
+
+        // Start or stop the DataProcessingThread based on the value of 'enable'
+        if (enable) {
+            dataProcessingThread = new DataProcessingThread(this.comPort);
+            dataProcessingThread.start();
+        } else {
+            if (dataProcessingThread != null) {
+                dataProcessingThread.interrupt(); // Stop the DataProcessingThread
+                dataProcessingThread = null;
+            }
+        }
     }
 
     public String interpretKeyPress(byte[] response) {
@@ -286,15 +286,10 @@ public class GraphitiDriver {
             int keyValue = (response[2] << 8) | (response[3] & 0xFF);
             int keyPressType = response[4];
             int checksum = response[5] & 0xFF;
-
-            // Calculate the checksum to validate the response
             int calculatedChecksum = ~(response[0] + response[1] + response[2] + response[3] + response[4]) + 1 & 0xFF;
-
             if (checksum != calculatedChecksum) {
                 return "Invalid checksum";
             }
-
-            // Decode the key value
             String keyName;
             switch (keyValue) {
                 case 0x1000:
@@ -342,14 +337,10 @@ public class GraphitiDriver {
                 default:
                     keyName = "Unknown";
             }
-
-            // Check if multiple keys are pressed
             boolean isMultipleKeysPressed = false;
             if (keyValue > 0xFFFF) {
                 isMultipleKeysPressed = true;
             }
-
-            // Decode the key press type
             String pressType;
             switch (keyPressType) {
                 case 0x02:
@@ -358,8 +349,6 @@ public class GraphitiDriver {
                 default:
                     pressType = "Unknown";
             }
-
-            // Build the interpretation string
             StringBuilder interpretation = new StringBuilder();
             interpretation.append("Key Value: ");
             if (isMultipleKeysPressed) {
@@ -368,7 +357,6 @@ public class GraphitiDriver {
                 interpretation.append(keyName);
             }
             interpretation.append(", Key Press Type: ").append(pressType);
-
             return interpretation.toString();
         } else {
             return "Invalid response format";
@@ -384,13 +372,21 @@ public class GraphitiDriver {
         }
     }
 
-    // Send ACK command to the Graphiti device
-    public byte[] sendAck() throws IOException {
-        return sendCommand(ACK, new byte[0]);
+    void sendAck() throws IOException {
+        byte[] command = new byte[]{ESC, ACK};
+        comPort.writeBytes(command, command.length);
+        byte[] response = new byte[2];
+        comPort.readBytes(response, response.length);
     }
 
-    // Send NACK command to the Graphiti device
-    public byte[] sendNack() throws IOException {
-        return sendCommand(NACK, new byte[0]);
+    private void sendNack() throws IOException {
+        byte[] command = new byte[]{ESC, NACK};
+        comPort.writeBytes(command, command.length);
+    }
+
+    public void disconnect() {
+        if (comPort != null && comPort.isOpen()) {
+            comPort.closePort();
+        }
     }
 }
