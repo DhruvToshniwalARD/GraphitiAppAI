@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.canvas.Canvas?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.VBox?>
+<VBox alignment="CENTER" spacing="20.0" xmlns:fx="http://javafx.com/fxml"
+      fx:controller="com.graphitiapp.graphitiappmaven.Controller">
+    <padding>
+        <Insets bottom="20.0" left="20.0" right="20.0" top="20.0"/>
+    </padding>
+
+    <Button fx:id="uploadButton" text="Upload File" onAction="#onUploadButtonClick"/>
+    <Button fx:id="describeButton" text="Describe Image" onAction="#onDescribeButtonClick"/>
+    <Label fx:id="feedbackLabel" text=""/>
+    <Button fx:id="feedbackButton" text="Interactive Feedback" onAction="#onFeedbackButtonClick"/>
+    <Canvas fx:id="canvas" width="800" height="600"/>
+    <Label fx:id="connectionStatus" text="Not connected"/>
+</VBox>
