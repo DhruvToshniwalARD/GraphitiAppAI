@@ -1,5 +1,7 @@
 package com.graphitiapp.graphitiappmaven;
 
+import com.sun.speech.freetts.Voice;
+import com.sun.speech.freetts.VoiceManager;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -31,9 +33,11 @@ import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+
 import java.util.concurrent.Executors;
 
 public class Controller {
+    private static final String VOICENAME_kevin = "kevin16";
 
     private static int imageCount = 0;
     @FXML
@@ -56,10 +60,10 @@ public class Controller {
     private GraphitiDriver driver = new GraphitiDriver();
     private JsonObject objectInfo; // JSON object for storing object detection information
 
-
     @FXML
     public void initialize() {
         this.imageView = new ImageView();
+        System.setProperty("freetts.voices", "com.sun.speech.freetts.en.us.cmu_us_kal.KevinVoiceDirectory");
         listenForUSBConnection();
     }
 
@@ -99,6 +103,7 @@ public class Controller {
         this.selectedFile = fileChooser.showOpenDialog(null);
         if (this.selectedFile != null) {
             feedbackLabel.setText("Current file: " + selectedFile.getName());
+            speakText(feedbackLabel.getText());
             try {
                 URI selectedFileURI = this.selectedFile.toURI();
                 Image image = new Image(selectedFileURI.toString());
@@ -113,6 +118,7 @@ public class Controller {
                     }
                 } else {
                     System.out.println("Graphiti device not connected. Can't send image.");
+                    speakText("Graphiti device not connected. Can't send image.");
                 }
 
                 // Display the image
@@ -123,12 +129,15 @@ public class Controller {
 
             } catch (IllegalArgumentException e) {
                 System.out.println("Invalid image file selected. Please select a valid image file.");
+                speakText("Invalid image file selected. Please select a valid image file.");
             } catch (Exception e) {
                 System.out.println("An unexpected error occurred while uploading the image.");
+                speakText("An unexpected error occurred while uploading the image.");
                 e.printStackTrace();
             }
         } else {
             System.out.println("No file selected.");
+            speakText("No file selected.");
         }
     }
 
@@ -160,9 +169,11 @@ public class Controller {
             feedbackLabel.setText("Description: " + description);
         }
 
-        driver.setKeyEvent(false);
-        driver.setTouchEvent(false);
-
+        speakText(description);
+        if (driver.isConnected()) {
+            driver.setKeyEvent(false);
+            driver.setTouchEvent(false);
+        }
     }
 
     private String describeImage() throws IOException, InterruptedException {
@@ -258,8 +269,12 @@ public class Controller {
 
         feedbackLabel.setText("");
         detectAndDisplayObjects();
-//        driver.setKeyEvent(true);
-//        driver.setTouchEvent(true);
+        if (driver.isConnected()) {
+            driver.setKeyEvent(true);
+            driver.setTouchEvent(true);
+        }
+
+        final String[] previousObjectName = {""};
 
         // Calculate bounding boxes for the downsampled image
         Image image = new Image("file:" + selectedFile.getPath());
@@ -308,8 +323,13 @@ public class Controller {
                     }
 
                     final String finalTouchedObjectName = touchedObjectName;
+                    if (!touchedObjectName.equalsIgnoreCase(previousObjectName[0])) {
+                        // Speak the object name using the voice synthesis thread
+                        speakText(touchedObjectName);
+                    }
+                    // Update the previous object name
+                    previousObjectName[0] = touchedObjectName;
                     Platform.runLater(() -> feedbackLabel.setText(finalTouchedObjectName));
-
                     Thread.sleep(100); // set delay as per requirement
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -450,6 +470,11 @@ public class Controller {
             coordinatesStage.close();
             feedbackButton.setUserData(null);
         }
+    }
+
+    private void speakText(String text) {
+        VoiceSynthesisThread voiceThread = new VoiceSynthesisThread(text);
+        voiceThread.start();
     }
 
 
